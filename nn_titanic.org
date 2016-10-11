@@ -1,0 +1,528 @@
+#+TITLE: title
+#+AUTHOR: 刘敏
+#+OPTIONS: toc:nil
+#+OPTIONS: ^:nil
+#+EMAIL: leomin@gmail.com
+* Kaggle Titanic problem solution
+** 导入库，并做相应的配置
+#+BEGIN_SRC ipython :session :exports both :tangle yes
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+from sklearn.ensemble import RandomForestClassifier
+import xgboost as xgb
+import seaborn as sns
+sns.set_style('whitegrid')
+%matplotlib inline
+#+END_SRC
+
+#+RESULTS:
+
+** 数据准备
+*** 读入csv数据
+#+BEGIN_SRC ipython :session :exports both :tangle yes
+train_df = pd.read_csv('train.csv')
+test_df = pd.read_csv('test.csv')
+train_df.head()
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+   PassengerId  Survived  Pclass  \
+0            1         0       3
+1            2         1       1
+2            3         1       3
+3            4         1       1
+4            5         0       3
+
+                                                Name     Sex   Age  SibSp  \
+0                            Braund, Mr. Owen Harris    male  22.0      1
+1  Cumings, Mrs. John Bradley (Florence Briggs Th...  female  38.0      1
+2                             Heikkinen, Miss. Laina  female  26.0      0
+3       Futrelle, Mrs. Jacques Heath (Lily May Peel)  female  35.0      1
+4                           Allen, Mr. William Henry    male  35.0      0
+
+   Parch            Ticket     Fare Cabin Embarked
+0      0         A/5 21171   7.2500   NaN        S
+1      0          PC 17599  71.2833   C85        C
+2      0  STON/O2. 3101282   7.9250   NaN        S
+3      0            113803  53.1000  C123        S
+4      0            373450   8.0500   NaN        S
+#+end_example
+
+*** 看看数据大概的信息
+#+BEGIN_SRC ipython :session :results output :exports both :tangle yes
+train_df.info()
+print '-'*80
+test_df.info()
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+<class 'pandas.core.frame.DataFrame'>
+RangeIndex: 891 entries, 0 to 890
+Data columns (total 12 columns):
+PassengerId    891 non-null int64
+Survived       891 non-null int64
+Pclass         891 non-null int64
+Name           891 non-null object
+Sex            891 non-null object
+Age            714 non-null float64
+SibSp          891 non-null int64
+Parch          891 non-null int64
+Ticket         891 non-null object
+Fare           891 non-null float64
+Cabin          204 non-null object
+Embarked       889 non-null object
+dtypes: float64(2), int64(5), object(5)
+memory usage: 83.6+ KB
+--------------------------------------------------------------------------------
+<class 'pandas.core.frame.DataFrame'>
+RangeIndex: 418 entries, 0 to 417
+Data columns (total 11 columns):
+PassengerId    418 non-null int64
+Pclass         418 non-null int64
+Name           418 non-null object
+Sex            418 non-null object
+Age            332 non-null float64
+SibSp          418 non-null int64
+Parch          418 non-null int64
+Ticket         418 non-null object
+Fare           417 non-null float64
+Cabin          91 non-null object
+Embarked       418 non-null object
+dtypes: float64(2), int64(4), object(5)
+memory usage: 36.0+ KB
+#+end_example
+
+从上面数据信息可以得到如下初步结论：
+1. 有些字段有数据缺失：Age Cabin Fare Embarked
+2. 有些字段是String类型，不是数字类型，后面需要转换
+3. 有些字段需要用one-hot encoding
+*** 数据预处理
+**** 去除不必要的字段
+有些字段和目标值关联性不大，可以直接去掉
+#+BEGIN_SRC ipython :session :exports code :tangle yes
+train_df.drop(['PassengerId', 'Name', 'Ticket'], axis=1, inplace=True)
+test_df.drop(['Name', 'Ticket'], axis=1, inplace=True)
+#+END_SRC
+
+#+RESULTS:
+
+#+begin_example
+     Pclass     Sex   Age  SibSp  Parch      Fare            Cabin Embarked
+0         3    male  34.5      0      0    7.8292              NaN        Q
+1         3  female  47.0      1      0    7.0000              NaN        S
+2         2    male  62.0      0      0    9.6875              NaN        Q
+3         3    male  27.0      0      0    8.6625              NaN        S
+4         3  female  22.0      1      1   12.2875              NaN        S
+5         3    male  14.0      0      0    9.2250              NaN        S
+6         3  female  30.0      0      0    7.6292              NaN        Q
+7         2    male  26.0      1      1   29.0000              NaN        S
+8         3  female  18.0      0      0    7.2292              NaN        C
+9         3    male  21.0      2      0   24.1500              NaN        S
+10        3    male   NaN      0      0    7.8958              NaN        S
+11        1    male  46.0      0      0   26.0000              NaN        S
+12        1  female  23.0      1      0   82.2667              B45        S
+13        2    male  63.0      1      0   26.0000              NaN        S
+14        1  female  47.0      1      0   61.1750              E31        S
+15        2  female  24.0      1      0   27.7208              NaN        C
+16        2    male  35.0      0      0   12.3500              NaN        Q
+17        3    male  21.0      0      0    7.2250              NaN        C
+18        3  female  27.0      1      0    7.9250              NaN        S
+19        3  female  45.0      0      0    7.2250              NaN        C
+20        1    male  55.0      1      0   59.4000              NaN        C
+21        3    male   9.0      0      1    3.1708              NaN        S
+22        1  female   NaN      0      0   31.6833              NaN        S
+23        1    male  21.0      0      1   61.3792              NaN        C
+24        1  female  48.0      1      3  262.3750  B57 B59 B63 B66        C
+25        3    male  50.0      1      0   14.5000              NaN        S
+26        1  female  22.0      0      1   61.9792              B36        C
+27        3    male  22.5      0      0    7.2250              NaN        C
+28        1    male  41.0      0      0   30.5000              A21        S
+29        3    male   NaN      2      0   21.6792              NaN        C
+..      ...     ...   ...    ...    ...       ...              ...      ...
+388       3    male  21.0      0      0    7.7500              NaN        Q
+389       3    male   6.0      3      1   21.0750              NaN        S
+390       1    male  23.0      0      0   93.5000              B24        S
+391       1  female  51.0      0      1   39.4000              D28        S
+392       3    male  13.0      0      2   20.2500              NaN        S
+393       2    male  47.0      0      0   10.5000              NaN        S
+394       3    male  29.0      3      1   22.0250              NaN        S
+395       1  female  18.0      1      0   60.0000              C31        S
+396       3    male  24.0      0      0    7.2500              NaN        Q
+397       1  female  48.0      1      1   79.2000              B41        C
+398       3    male  22.0      0      0    7.7750              NaN        S
+399       3    male  31.0      0      0    7.7333              NaN        Q
+400       1  female  30.0      0      0  164.8667               C7        S
+401       2    male  38.0      1      0   21.0000              NaN        S
+402       1  female  22.0      0      1   59.4000              NaN        C
+403       1    male  17.0      0      0   47.1000              NaN        S
+404       1    male  43.0      1      0   27.7208              D40        C
+405       2    male  20.0      0      0   13.8625              D38        C
+406       2    male  23.0      1      0   10.5000              NaN        S
+407       1    male  50.0      1      1  211.5000              C80        C
+408       3  female   NaN      0      0    7.7208              NaN        Q
+409       3  female   3.0      1      1   13.7750              NaN        S
+410       3  female   NaN      0      0    7.7500              NaN        Q
+411       1  female  37.0      1      0   90.0000              C78        Q
+412       3  female  28.0      0      0    7.7750              NaN        S
+413       3    male   NaN      0      0    8.0500              NaN        S
+414       1  female  39.0      0      0  108.9000             C105        C
+415       3    male  38.5      0      0    7.2500              NaN        S
+416       3    male   NaN      0      0    8.0500              NaN        S
+417       3    male   NaN      1      1   22.3583              NaN        C
+
+[418 rows x 8 columns]
+#+end_example
+**** Embarked和survived的关系
+Embarked在训练集中有数据缺失，缺两条。所以用最多的Embarked对缺失数据进行填充('S')
+#+BEGIN_SRC ipython :session :exports both :tangle yes
+train_df['Embarked'] = train_df['Embarked'].fillna('S')
+print train_df['Embarked']
+#+END_SRC
+
+#+RESULTS:
+
+#+BEGIN_SRC ipython :session :file /scratch/personal/Dropbox/programming/kaggle/titanic/py20902XGf.png :exports both :tangle yes
+# plot
+sns.factorplot('Embarked','Survived', data=train_df,size=4,aspect=3)
+#+END_SRC
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py20902XGf.png]]
+#+BEGIN_SRC ipython :session :file /scratch/personal/Dropbox/programming/kaggle/titanic/py37218EKO.png :exports both :tangle yes
+fig, (axis1,axis2,axis3) = plt.subplots(1,3,figsize=(15,5))
+sns.countplot(x='Embarked', data=train_df, ax=axis1)
+sns.countplot(x='Survived', hue='Embarked', data=train_df, ax=axis2)
+embark_perc = train_df[['Embarked', 'Survived']].groupby(['Embarked'], as_index=False).mean()
+sns.barplot(x='Embarked', y='Survived', data=embark_perc, order=['S','C','Q'], ax=axis3)
+#+END_SRC
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py37218EKO.png]]
+可以看出Embark为'C'的存活的比例最大
+**** 将Embark这种category特征转化为数字特征(one-hot encoding)
+[2016-10-08 Sat 16:37]
+#+BEGIN_SRC ipython :session  :exports both :tangle yes :results output
+embark_dummies_train = pd.get_dummies(train_df['Embarked'])
+print embark_dummies_train
+# drop S in Embarked dummies
+embark_dummies_train.drop(['S'], axis=1, inplace=True)
+embark_dummies_test = pd.get_dummies(test_df['Embarked'])
+embark_dummies_test.drop(['S'], axis=1, inplace=True)
+train_df = train_df.join(embark_dummies_train)
+test_df = test_df.join(embark_dummies_test)
+train_df.drop(['Embarked'], axis=1, inplace=True)
+test_df.drop(['Embarked'], axis=1, inplace=True)
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+       C    Q    S
+0    0.0  0.0  1.0
+1    1.0  0.0  0.0
+2    0.0  0.0  1.0
+3    0.0  0.0  1.0
+4    0.0  0.0  1.0
+5    0.0  1.0  0.0
+6    0.0  0.0  1.0
+7    0.0  0.0  1.0
+8    0.0  0.0  1.0
+9    1.0  0.0  0.0
+10   0.0  0.0  1.0
+11   0.0  0.0  1.0
+12   0.0  0.0  1.0
+13   0.0  0.0  1.0
+14   0.0  0.0  1.0
+15   0.0  0.0  1.0
+16   0.0  1.0  0.0
+17   0.0  0.0  1.0
+18   0.0  0.0  1.0
+19   1.0  0.0  0.0
+20   0.0  0.0  1.0
+21   0.0  0.0  1.0
+22   0.0  1.0  0.0
+23   0.0  0.0  1.0
+24   0.0  0.0  1.0
+25   0.0  0.0  1.0
+26   1.0  0.0  0.0
+27   0.0  0.0  1.0
+28   0.0  1.0  0.0
+29   0.0  0.0  1.0
+..   ...  ...  ...
+861  0.0  0.0  1.0
+862  0.0  0.0  1.0
+863  0.0  0.0  1.0
+864  0.0  0.0  1.0
+865  0.0  0.0  1.0
+866  1.0  0.0  0.0
+867  0.0  0.0  1.0
+868  0.0  0.0  1.0
+869  0.0  0.0  1.0
+870  0.0  0.0  1.0
+871  0.0  0.0  1.0
+872  0.0  0.0  1.0
+873  0.0  0.0  1.0
+874  1.0  0.0  0.0
+875  1.0  0.0  0.0
+876  0.0  0.0  1.0
+877  0.0  0.0  1.0
+878  0.0  0.0  1.0
+879  1.0  0.0  0.0
+880  0.0  0.0  1.0
+881  0.0  0.0  1.0
+882  0.0  0.0  1.0
+883  0.0  0.0  1.0
+884  0.0  0.0  1.0
+885  0.0  1.0  0.0
+886  0.0  0.0  1.0
+887  0.0  0.0  1.0
+888  0.0  0.0  1.0
+889  1.0  0.0  0.0
+890  0.0  1.0  0.0
+
+[891 rows x 3 columns]
+#+end_example
+**** Fare和Survived的关系
+[2016-10-08 Sat 16:50]
+#+BEGIN_SRC ipython :session :exports both :tangle yes
+# fill na value in Test of Fare
+test_df['Fare'].fillna(test_df['Fare'].median(), inplace=True)
+train_df['Fare'] = train_df['Fare'].astype(int)
+test_df['Fare'] = test_df['Fare'].astype(int)
+train_df.info()
+print '-' * 40
+test_df.info()
+print test_df['Fare']
+#+END_SRC
+
+#+RESULTS:
+
+#+RESULTS:
+
+#+BEGIN_SRC ipython :session :file /scratch/personal/Dropbox/programming/kaggle/titanic/py37218Okm.png :exports both :tangle yes
+# Fare hist
+train_df['Fare'].plot(kind='hist', figsize=(15,3), bins=100, xlim=(0,50))
+#+END_SRC
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py37218Okm.png]]
+#+BEGIN_SRC ipython :session :file /scratch/personal/Dropbox/programming/kaggle/titanic/py37218qWR.png :exports both :tangle yes
+# Fare vs Survived
+fare_not_survived = train_df['Fare'][train_df['Survived'] == 0]
+fare_survived = train_df['Fare'][train_df['Survived'] == 1]
+fare_avg = pd.DataFrame([fare_not_survived.mean(), fare_survived.mean()])
+std_fare = pd.DataFrame([fare_not_survived.std(), fare_survived.std()])
+std_fare.index.names = fare_avg.index.names = ['Survived']
+fare_avg.plot(kind='bar', yerr=std_fare, legend=False)
+#+END_SRC
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py37218qWR.png]]
+**** Age
+#+BEGIN_SRC ipython :session :file /scratch/personal/Dropbox/programming/kaggle/titanic/py372187rn.png :exports both :tangle yes
+fig, (axis1, axis2) = plt.subplots(1, 2, figsize=(15,4))
+axis1.set_title('Age original value')
+axis2.set_title('New age values')
+# age in train
+train_age_avg = train_df['Age'].mean()
+train_age_std = train_df['Age'].std()
+train_count_age_nan = train_df['Age'].isnull().sum()
+# age in test
+test_age_avg = test_df['Age'].mean()
+test_age_std = test_df['Age'].std()
+test_count_age_nan = test_df['Age'].isnull().sum()
+
+# generate new ages in range [mean-3*std, mean + 3*std]
+rand_1 = np.random.randint(train_age_avg - 3 * train_age_std,
+                           train_age_avg + 3 * train_age_std,
+                           train_count_age_nan)
+rand_2 = np.random.randint(test_age_avg - 3 * test_age_std,
+                           test_age_avg + 3 * test_age_std,
+                           test_count_age_nan)
+# plot original age hist
+train_df['Age'].dropna().astype(int).hist(bins=70, ax=axis1)
+# fill nan values
+train_df['Age'][np.isnan(train_df['Age'])] = rand_1
+test_df['Age'][np.isnan(test_df['Age'])] = rand_2
+train_df['Age'] = train_df['Age'].astype(int)
+test_df['Age'] = test_df['Age'].astype(int)
+
+# plot new age hist
+train_df['Age'].hist(bins=70, ax=axis2)
+#+END_SRC
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py372187rn.png]]
+#+BEGIN_SRC ipython :session :file /scratch/personal/Dropbox/programming/kaggle/titanic/py37218ABd.png :exports both :tangle yes
+# kde plot of age vs survived
+facet = sns.FacetGrid(train_df, hue='Survived', aspect=4)
+facet.map(sns.kdeplot, 'Age', shade=True)
+facet.set(xlim=(0, train_df['Age'].max()))
+facet.add_legend()
+
+#+END_SRC
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py37218ABd.png]]
+#+BEGIN_SRC ipython :session :file /scratch/personal/Dropbox/programming/kaggle/titanic/py372185Rd.png :exports both :tangle yes
+age_avg = train_df[['Age', 'Survived']].groupby(['Age'], as_index=False).mean()
+fig, axis = plt.subplots(1,1,figsize=(18,4))
+sns.barplot(x='Age', y='Survived', data=age_avg, ax=axis)
+#+END_SRC
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py372185Rd.png]]
+**** Carbin
+#+BEGIN_SRC ipython :session  :exports both :tangle yes
+# Cabin
+# It has a lot of NaN values, so it won't cause a remarkable impact on prediction
+train_df.drop("Cabin",axis=1,inplace=True)
+test_df.drop("Cabin",axis=1,inplace=True)
+#+END_SRC
+
+#+RESULTS:
+**** Family
+
+#+BEGIN_SRC ipython :session  :exports both :tangle yes
+# Family
+# Instead of having two columns Parch & SibSp,
+# we can have only one column represent if the passenger had any family member aboard or not,
+# Meaning, if having any family member(whether parent, brother, ...etc) will increase chances of Survival or not.
+train_df['Family'] =  train_df["Parch"] + train_df["SibSp"]
+train_df['Family'].loc[train_df['Family'] > 0] = 1
+train_df['Family'].loc[train_df['Family'] == 0] = 0
+
+test_df['Family'] =  test_df["Parch"] + test_df["SibSp"]
+test_df['Family'].loc[test_df['Family'] > 0] = 1
+test_df['Family'].loc[test_df['Family'] == 0] = 0
+
+train_df = train_df.drop(['SibSp','Parch'], axis=1)
+test_df    = test_df.drop(['SibSp','Parch'], axis=1)
+#+END_SRC
+
+#+RESULTS:
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py37218bKy.png]]
+**** Sex
+#+BEGIN_SRC ipython :session  :exports both :tangle yes
+# As we see, children(age < ~16) on aboard seem to have a high chances for Survival.
+# So, we can classify passengers as males, females, and child
+def get_person(passenger):
+    age,sex = passenger
+    return 'child' if age < 16 else sex
+
+train_df['Person'] = train_df[['Age', 'Sex']].apply(get_person, axis=1)
+test_df['Person'] = test_df[['Age', 'Sex']].apply(get_person, axis=1)
+
+# No need to use Sex column since we created Person column
+train_df.drop(['Sex'],axis=1,inplace=True)
+test_df.drop(['Sex'],axis=1,inplace=True)
+
+# create dummy variables for Person column, & drop Male as it has the lowest average of survived passengers
+person_dummies_train = pd.get_dummies(train_df['Person'])
+person_dummies_train.columns = ['Child', 'Female', 'Male']
+person_dummies_train.drop(['Male'], axis=1, inplace=True)
+
+person_dummies_test = pd.get_dummies(test_df['Person'])
+person_dummies_test.columns = ['Child', 'Female', 'Male']
+person_dummies_test.drop(['Male'], axis=1, inplace=True)
+
+train_df = train_df.join(person_dummies_train)
+test_df = test_df.join(person_dummies_test)
+
+train_df.drop('Person', axis=1, inplace=True)
+test_df.drop('Person', axis=1, inplace=True)
+#+END_SRC
+
+#+RESULTS:
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py37218zQy.png]]
+**** Pclass
+#+BEGIN_SRC ipython :session :file /scratch/personal/Dropbox/programming/kaggle/titanic/py37218r1H.png :exports both :tangle yes
+sns.factorplot('Pclass','Survived',order=[1,2,3], data=train_df,size=5)
+#+END_SRC
+
+#+RESULTS:
+[[file:/scratch/personal/Dropbox/programming/kaggle/titanic/py37218r1H.png]]
+#+BEGIN_SRC ipython :session  :exports both :tangle yes
+pclass_dummies_train  = pd.get_dummies(train_df['Pclass'])
+pclass_dummies_train.columns = ['Class_1','Class_2','Class_3']
+pclass_dummies_train.drop(['Class_3'], axis=1, inplace=True)
+
+pclass_dummies_test  = pd.get_dummies(test_df['Pclass'])
+pclass_dummies_test.columns = ['Class_1','Class_2','Class_3']
+pclass_dummies_test.drop(['Class_3'], axis=1, inplace=True)
+
+train_df.drop('Pclass', axis=1, inplace=True)
+test_df.drop('Pclass', axis=1, inplace=True)
+
+train_df = train_df.join(pclass_dummies_train)
+test_df = test_df.join(pclass_dummies_test)
+#+END_SRC
+
+#+RESULTS:
+**** Final Feature
+#+BEGIN_SRC ipython :session  :exports both :tangle yes :results output
+train_df.info()
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+<class 'pandas.core.frame.DataFrame'>
+RangeIndex: 891 entries, 0 to 890
+Data columns (total 10 columns):
+Survived    891 non-null int64
+Age         891 non-null int64
+Fare        891 non-null int64
+C           891 non-null float64
+Q           891 non-null float64
+Family      891 non-null int64
+Child       891 non-null float64
+Female      891 non-null float64
+Class_1     891 non-null float64
+Class_2     891 non-null float64
+dtypes: float64(6), int64(4)
+memory usage: 69.7 KB
+#+end_example
+**** Define training and testing sets
+#+BEGIN_SRC ipython :session  :exports both :tangle yes
+X_train = train_df.drop('Survived', axis=1)
+Y_train = train_df['Survived']
+X_test = test_df.drop('PassengerId', axis=1).copy()
+#+END_SRC
+
+#+RESULTS:
+*** Machine Learning(NN)
+#+BEGIN_SRC ipython :session   :exports both :tangle yes
+data = mx.symbol.Variable('data')
+fc1  = mx.symbol.FullyConnected(data = data, name='fc1', num_hidden=128)
+act1 = mx.symbol.Activation(data = fc1, name='relu1', act_type="relu")
+fc2  = mx.symbol.FullyConnected(data = act1, name = 'fc2', num_hidden = 64)
+act2 = mx.symbol.Activation(data = fc2, name='relu2', act_type="relu")
+fc3  = mx.symbol.FullyConnected(data = act2, name='fc3', num_hidden=10)
+##lr  = mx.symbol.LogisticRegressionOutput(data=fc3, name='lr')
+lr = mx.symbol.SoftmaxOutput(data=fc3, name='softmax')
+
+#+END_SRC
+
+#+RESULTS:
+
+#+RESULTS:
+#+BEGIN_SRC ipython :session   :exports both :tangle yes :results output
+model = mx.model.FeedForward(
+symbol = lr,
+num_epoch = 10,
+learning_rate = 0.01,
+momentum = 0.9,
+wd = 0.00001)
+
+model.fit(X=train_iter,
+          eval_data = test_iter,
+          batch_end_callback = mx.callback.Speedometer(batch_size, 200))
+#+END_SRC
+
+#+RESULTS:
